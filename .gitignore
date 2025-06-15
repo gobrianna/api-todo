@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+
+# build artifacts
+dist/
+
+# environmental variables
+.env
+
+# ide-specific files
+.vscode/
+.idea/
+
+# logs
+.log
