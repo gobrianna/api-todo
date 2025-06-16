@@ -13,3 +13,6 @@ dist/
 
 # logs
 .log
+
+# bruno temp files
+tests/bruno/*.tmp
