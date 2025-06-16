@@ -1,0 +1,17 @@
+meta {
+  name: update-task
+  type: http
+  seq: 1
+}
+
+put {
+  url: http://localhost:3000/tasks/2
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "completed": true
+  }
+}
