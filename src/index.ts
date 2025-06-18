@@ -1,5 +1,14 @@
 import express, { Request, Response } from "express";
-import { Task } from "./types";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  ScanCommand,
+  UpdateCommand,
+  DeleteCommand,
+} from "@aws-sdk/lib-dynamodb";
+import { v4 as uuidv4 } from "uuid"; // uuid for unique ID generation
 
 const app = express();
 const PORT = 3000;
@@ -7,89 +16,151 @@ const PORT = 3000;
 // JSON parser
 app.use(express.json());
 
-// in-memory array task storage
-let tasks: Task[] = [];
-let currentId = 1;
+// init dynamodb
+const dynamoDBClient = new DynamoDBClient({ region: "us-east-1" });
+const docClient = DynamoDBDocumentClient.from(dynamoDBClient);
 
-// creates new task
-app.post("/tasks", (req: Request, res: Response) => {
+const validateTaskInput = (body: any): { valid: boolean; error?: string } => {
+  if (!body.title || typeof body.title !== "string") {
+    return { valid: false, error: 'Invalid or missing "title" field' };
+  }
+  return { valid: true };
+};
+
+// handle and log internal error
+const sendServerError = (res: Response, error: unknown) => {
+  console.error("Internal server error:", error);
+  res.status(500).send("Internal Server Error");
+};
+
+// create task
+app.post("/tasks", async (req: Request, res: Response): Promise<void> => {
   const { title } = req.body;
 
-  if (!title || typeof title !== "string") {
-    res.status(400).send('Invalid or missing "title" field');
+  const validation = validateTaskInput(req.body);
+  if (!validation.valid) {
+    res.status(400).send(validation.error);
     return;
   }
 
-  const newTask: Task = {
-    id: currentId++,
+  const newTask = {
+    id: uuidv4(),
     title,
     completed: false,
   };
 
-  tasks.push(newTask);
-  res.status(201).json(newTask);
+  try {
+    await docClient.send(
+      new PutCommand({
+        TableName: "Tasks",
+        Item: newTask,
+      })
+    );
+
+    void res.status(201).json(newTask);
+  } catch (error) {
+    sendServerError(res, error);
+  }
 });
 
 // get all tasks
-app.get("/tasks", (req: Request, res: Response) => {
-  res.json(tasks);
-});
+app.get("/tasks", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const data = await docClient.send(
+      new ScanCommand({
+        TableName: "Tasks",
+      })
+    );
 
-// get a single task by ID
-app.get("/tasks/:id", (req: Request, res: Response) => {
-  const taskId = parseInt(req.params.id, 10);
-  const task = tasks.find((t) => t.id === taskId);
-
-  if (!task) {
-    res.status(404).send("Task not found");
-    return;
+    void res.json(data.Items || []);
+  } catch (error) {
+    sendServerError(res, error);
   }
-
-  res.json(task);
 });
 
-// updates a task by ID
-app.put("/tasks/:id", (req: Request, res: Response) => {
-  const taskId = parseInt(req.params.id, 10);
+// get single task by id
+app.get("/tasks/:id", async (req: Request, res: Response): Promise<void> => {
+  const taskId = req.params.id;
+
+  try {
+    const data = await docClient.send(
+      new GetCommand({
+        TableName: "Tasks",
+        Key: { id: taskId },
+      })
+    );
+
+    if (!data.Item) {
+      void res.status(404).send("Task not found");
+      return;
+    }
+
+    void res.json(data.Item);
+  } catch (error) {
+    sendServerError(res, error);
+  }
+});
+
+// update task
+app.put("/tasks/:id", async (req: Request, res: Response): Promise<void> => {
+  const taskId = req.params.id;
   const { title, completed } = req.body;
 
-  const taskIndex = tasks.findIndex((t) => t.id === taskId);
-  if (taskIndex === -1) {
-    res.status(404).send("Task not found");
-    return;
+  try {
+    const updateParams: any = {
+      TableName: "Tasks",
+      Key: { id: taskId },
+      UpdateExpression: "SET",
+      ExpressionAttributeNames: {},
+      ExpressionAttributeValues: {},
+    };
+
+    if (title !== undefined) {
+      updateParams.UpdateExpression += " #title = :title,";
+      updateParams.ExpressionAttributeNames["#title"] = "title";
+      updateParams.ExpressionAttributeValues[":title"] = title;
+    }
+
+    if (completed !== undefined) {
+      updateParams.UpdateExpression += " completed = :completed,";
+      updateParams.ExpressionAttributeValues[":completed"] = completed;
+    }
+
+    // remove coma trail
+    updateParams.UpdateExpression = updateParams.UpdateExpression.replace(
+      /,$/,
+      ""
+    );
+
+    const data = await docClient.send(new UpdateCommand(updateParams));
+
+    if (!data.Attributes) {
+      void res.status(404).send("Task not found");
+      return;
+    }
+
+    void res.json(data.Attributes);
+  } catch (error) {
+    sendServerError(res, error);
   }
-
-  if (title !== undefined && typeof title !== "string") {
-    res.status(400).send('Invalid "title" field');
-    return;
-  }
-
-  if (completed !== undefined && typeof completed !== "boolean") {
-    res.status(400).send('Invalid "completed" field');
-    return;
-  }
-
-  tasks[taskIndex] = {
-    ...tasks[taskIndex],
-    title: title || tasks[taskIndex].title,
-    completed: completed !== undefined ? completed : tasks[taskIndex].completed,
-  };
-
-  res.json(tasks[taskIndex]);
 });
 
-// delete a single task
-app.delete("/tasks/:id", (req: Request, res: Response) => {
-  const taskId = parseInt(req.params.id, 10);
-  const taskIndex = tasks.findIndex((t) => t.id === taskId);
+// delete task
+app.delete("/tasks/:id", async (req: Request, res: Response): Promise<void> => {
+  const taskId = req.params.id;
 
-  if (taskIndex === -1) {
-    res.status(404).send("Task not found");
-    return;
+  try {
+    await docClient.send(
+      new DeleteCommand({
+        TableName: "Tasks",
+        Key: { id: taskId },
+      })
+    );
+
+    void res.status(204).send();
+  } catch (error) {
+    sendServerError(res, error);
   }
-
-  tasks.splice(taskIndex, 1);
-  res.status(204).send();
 });
 
 // start server
