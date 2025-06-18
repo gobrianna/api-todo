@@ -10,20 +10,15 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 import { Task } from "../types/task";
 
-// dynamodb client config
+// dynamodb config using default cred provider
 const dynamoDBClient = DynamoDBDocumentClient.from(
   new DynamoDBClient({
-    region: process.env.AWS_REGION,
-    credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-    },
+    region: process.env.AWS_REGION, // load region from .env variable
   }),
-  { marshallOptions: { removeUndefinedValues: true } } // auto-remove undefined fields
+  { marshallOptions: { removeUndefinedValues: true } }
 );
 
-type TaskUpdate = Partial<Pick<Task, "title" | "completed">>;
-
+// create task
 export const createTask = async (title: string): Promise<Task> => {
   const newTask: Task = {
     id: uuidv4(),
@@ -41,6 +36,7 @@ export const createTask = async (title: string): Promise<Task> => {
   return newTask;
 };
 
+// get tasks
 export const getAllTasks = async (): Promise<Task[]> => {
   const { Items } = await dynamoDBClient.send(
     new ScanCommand({
@@ -51,6 +47,7 @@ export const getAllTasks = async (): Promise<Task[]> => {
   return (Items as Task[]) ?? [];
 };
 
+// get single task by id
 export const getTaskById = async (id: string): Promise<Task | null> => {
   const { Item } = await dynamoDBClient.send(
     new GetCommand({
@@ -62,9 +59,10 @@ export const getTaskById = async (id: string): Promise<Task | null> => {
   return Item as Task | null;
 };
 
+// update task
 export const updateTask = async (
   id: string,
-  updates: TaskUpdate
+  updates: Partial<Task>
 ): Promise<Task | null> => {
   let UpdateExpression = "SET";
   const ExpressionAttributeNames: Record<string, string> = {};
@@ -97,6 +95,7 @@ export const updateTask = async (
   return Attributes as Task | null;
 };
 
+// delete task
 export const deleteTask = async (id: string): Promise<void> => {
   await dynamoDBClient.send(
     new DeleteCommand({
